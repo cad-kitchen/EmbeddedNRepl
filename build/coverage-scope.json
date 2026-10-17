@@ -1,0 +1,1 @@
+{"assemblies":["EmbeddedNRepl"],"projects":["EmbeddedNRepl.UnitTests","EmbeddedNRepl.TransportTests","EmbeddedNRepl.ClojureClr.Tests"]}

@@ -1,0 +1,5 @@
+(ns excel)
+(defn new-workbook! [] (.NewWorkbook ^EmbeddedNRepl.OfficeAddIn.ExcelApi host))
+(defn value [address] (.Value ^EmbeddedNRepl.OfficeAddIn.ExcelApi host (str address)))
+(defn set-value! [address value] (.SetValue ^EmbeddedNRepl.OfficeAddIn.ExcelApi host (str address) value))
+(defn set-formula! [address formula] (.SetFormula ^EmbeddedNRepl.OfficeAddIn.ExcelApi host (str address) (str formula)))

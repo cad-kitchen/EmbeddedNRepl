@@ -1,0 +1,70 @@
+(ns embedded-nrepl.session
+  (:import (System ArgumentException ArgumentNullException InvalidOperationException ObjectDisposedException)
+           (EmbeddedNRepl.Hosting IReplSessionSnapshot IReplSessionState IReplSessionStateFactory)))
+
+(deftype SessionState [owner bindings status]
+  IReplSessionState)
+
+(deftype SessionSnapshot [owner bindings]
+  IReplSessionSnapshot)
+
+(defn- owned-state [owner state]
+  (when (nil? state)
+    (throw (ArgumentNullException. "state")))
+  (when-not (and (instance? SessionState state)
+                 (identical? owner (.-owner ^SessionState state)))
+    (throw (ArgumentException. "The state belongs to a different session factory." "state")))
+  state)
+
+(defn- owned-snapshot [owner snapshot]
+  (when (nil? snapshot)
+    (throw (ArgumentNullException. "snapshot")))
+  (when-not (and (instance? SessionSnapshot snapshot)
+                 (identical? owner (.-owner ^SessionSnapshot snapshot)))
+    (throw (ArgumentException. "The snapshot belongs to a different session factory." "snapshot")))
+  snapshot)
+
+(defn state-bindings [^SessionState state]
+  (or @(.-bindings state)
+      (throw (ObjectDisposedException. "session"))))
+
+(defn acquire! [owner state]
+  (let [^SessionState state (owned-state owner state)
+        status (.-status state)]
+    (loop []
+      (case @status
+        :released (throw (ObjectDisposedException. "session"))
+        :busy (throw (InvalidOperationException. "Session bindings are already in use."))
+        :idle (if (compare-and-set! status :idle :busy) state (recur))))))
+
+(defn publish! [^SessionState state bindings]
+  (reset! (.-bindings state) bindings))
+
+(defn complete! [^SessionState state]
+  (reset! (.-status state) :idle))
+
+(defn- release-state! [^SessionState state]
+  (let [status (.-status state)]
+    (loop []
+      (case @status
+        :released nil
+        :busy (throw (InvalidOperationException. "Session bindings are still in use."))
+        :idle (if (compare-and-set! status :idle :released)
+                (reset! (.-bindings state) nil)
+                (recur))))))
+
+(deftype SessionFactory [initial]
+  IReplSessionStateFactory
+  (Create [this]
+    (SessionState. this (atom initial) (atom :idle)))
+  (Snapshot [this completed-state]
+    (let [^SessionState state (owned-state this completed-state)]
+      (SessionSnapshot. this (state-bindings state))))
+  (Clone [this published-snapshot]
+    (let [^SessionSnapshot snapshot (owned-snapshot this published-snapshot)]
+      (SessionState. this (atom (.-bindings snapshot)) (atom :idle))))
+  (Release [this state]
+    (release-state! (owned-state this state))))
+
+(defn create-factory [initial]
+  (SessionFactory. initial))

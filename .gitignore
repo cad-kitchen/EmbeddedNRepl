@@ -1,0 +1,17 @@
+artifacts/
+**/bin/
+**/obj/
+.vs/
+.clj-kondo/*
+!.clj-kondo/config.edn
+.lsp/
+*.user
+node_modules/
+.env
+.env.*
+!.env.example
+*.pfx
+*.p12
+*.key
+*.pem
+/customer-research/

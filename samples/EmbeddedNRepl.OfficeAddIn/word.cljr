@@ -1,0 +1,4 @@
+(ns word)
+(defn new-document! [] (.NewDocument ^EmbeddedNRepl.OfficeAddIn.WordApi host))
+(defn text [] (.Text ^EmbeddedNRepl.OfficeAddIn.WordApi host))
+(defn append! [text] (.Append ^EmbeddedNRepl.OfficeAddIn.WordApi host (str text)))

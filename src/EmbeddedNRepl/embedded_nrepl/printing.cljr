@@ -1,0 +1,83 @@
+(ns embedded-nrepl.printing
+  (:require [clojure.pprint :as pprint])
+  (:import (System Exception Object String)
+           (EmbeddedNRepl.Hosting IReplEvaluationOutput IReplOutput ReplEvaluationError
+                                 ReplOutputKind ReplPrintOptions Utf8QuotaExceededException Utf8QuotaWriter)
+           (clojure.lang Compiler+CompilerException)))
+
+(defn- print-limit [value ceiling]
+  (if (or (nil? value) (= false value))
+    ceiling
+    (try
+      (max 0 (min ceiling (long value)))
+      (catch Exception _ ceiling))))
+
+(def ^:private delimiters #{\( \) \[ \] \{ \} \space \, \newline \return \tab})
+
+(defn- elided? [text]
+  (loop [characters (seq text), quoted false, escaped false, token ""]
+    (if-let [character (first characters)]
+      (cond
+        escaped (recur (next characters) quoted false (if quoted token "x"))
+        (= character \\) (recur (next characters) quoted true token)
+        (= character \") (recur (next characters) (not quoted) false "")
+        quoted (recur (next characters) quoted false token)
+        (contains? delimiters character)
+        (if (or (= token "...") (= token "#"))
+          true
+          (recur (next characters) false false ""))
+        :else
+        (recur (next characters) false false
+               (if (< (count token) 4) (str token character) token)))
+      (or (= token "...") (= token "#")))))
+
+(defn bounded-print [value quota ^ReplPrintOptions options]
+  (let [writer (Utf8QuotaWriter. quota)]
+    (try
+      (binding [*print-length* (print-limit (if (and options (some? (.Length options))) (.Length options) *print-length*) 100)
+                *print-level* (print-limit (if (and options (some? (.Level options))) (.Level options) *print-level*) 10)
+                *print-dup* false]
+        (if options
+          (pprint/write value :stream writer :pretty true :right-margin (.RightMargin options)
+                        :length *print-length* :level *print-level*)
+          (print-method value writer))
+        (.Finish writer))
+      (catch Utf8QuotaExceededException _))
+    (let [text (.ToString writer)]
+      [text (or (.Exceeded writer) (elided? text))])))
+
+(defn write-value! [^IReplOutput output value namespace-name truncated]
+  (if (instance? IReplEvaluationOutput output)
+    (.TryWriteValue ^IReplEvaluationOutput output value namespace-name truncated)
+    (.TryWrite output ReplOutputKind/Value value 0 (.Length ^String value))))
+
+(defn- root-error [error]
+  (loop [root error, depth 0]
+    (if (and (< depth 32) (.InnerException ^Exception root))
+      (recur (.InnerException ^Exception root) (inc depth))
+      root)))
+
+(defn- safe-message [^Exception error]
+  (try
+    (or (.Message error) "")
+    (catch Exception _ "Exception message unavailable.")))
+
+(defn report-error!
+  [^IReplOutput output error code phase source line column]
+  (let [compiler? (instance? Compiler+CompilerException error)
+        phase (if (and (= phase "eval") compiler?) "compile" phase)
+        line (if compiler? (.Line ^Compiler+CompilerException error) line)
+        compiler-column (when compiler?
+                          (.valAt (.MyData ^Compiler+CompilerException error)
+                                  Compiler+CompilerException/ErrorColumnKeyword))
+        column (if compiler-column (long compiler-column) column)
+        root (root-error error)
+        details (ReplEvaluationError.
+                  code phase
+                  (or (.FullName (.GetType ^Object error)) "Exception")
+                  (or (.FullName (.GetType ^Object root)) "Exception")
+                  (safe-message root) source line column)]
+    (if (instance? IReplEvaluationOutput output)
+      (.ReportError ^IReplEvaluationOutput output details)
+      (let [message (.Message details)]
+        (.TryWrite output ReplOutputKind/Error message 0 (.Length ^String message))))))

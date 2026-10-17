@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net472</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="Microsoft.CSharp" />
+    <PackageReference Include="Clojure" />
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" PrivateAssets="all" />
+    <ProjectReference Include="../../src/EmbeddedNRepl/EmbeddedNRepl.csproj" />
+    <EmbeddedResource Include="word.cljr" LogicalName="word.cljr" />
+    <EmbeddedResource Include="excel.cljr" LogicalName="excel.cljr" />
+  </ItemGroup>
+</Project>

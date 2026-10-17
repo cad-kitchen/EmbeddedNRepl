@@ -1,0 +1,60 @@
+(ns embedded-nrepl.runtime
+  (:import (System ArgumentException InvalidOperationException String)
+           (clojure.lang IFn)))
+
+(def check-cancelled! embedded-nrepl.evaluation/check-cancelled!)
+
+(def ^:private preserved-binding-names
+  ["*ns*" "*1" "*2" "*3" "*e" "*print-length*" "*print-level*" "*print-meta*"
+   "*print-readably*" "*warn-on-reflection*" "*unchecked-math*" "*assert*"])
+
+(def ^:private history-binding-names #{"*1" "*2" "*3" "*e"})
+(def ^:private required-binding-names #{"*ns*" "*1" "*2" "*3" "*e"})
+
+(defn- initial-bindings [namespace-name]
+  (if-let [initial-namespace (find-ns (symbol namespace-name))]
+    (let [entries (mapv (fn [binding-name]
+                          [binding-name (ns-resolve 'clojure.core (symbol binding-name))])
+                        preserved-binding-names)
+          usable? (fn [[binding-name variable]]
+                    (and variable
+                         (.isDynamic variable)
+                         (or (history-binding-names binding-name) (.hasRoot variable))))
+          missing-required (first (filter (fn [[binding-name :as entry]]
+                                            (and (required-binding-names binding-name)
+                                                 (not (usable? entry))))
+                                          entries))]
+      (if missing-required
+        [nil "embedded-nrepl/runtime-not-initialized"
+         (str "The owner must provide dynamic clojure.core/" (first missing-required) ".")]
+        [(reduce (fn [result [binding-name variable]]
+                   (assoc result variable
+                          (cond
+                            (= binding-name "*ns*") initial-namespace
+                            (history-binding-names binding-name) nil
+                            :else (.getRawRoot variable))))
+                 {} (filter usable? entries))
+         nil nil]))
+    [nil "namespace-not-found"
+     "The requested namespace does not exist in the attached runtime."]))
+
+(defn create-adapter
+  ([runtime-group-id] (create-adapter runtime-group-id "user"))
+  ([runtime-group-id initial-namespace]
+   (when (String/IsNullOrWhiteSpace runtime-group-id)
+     (throw (ArgumentException. "A runtime group identity is required." "runtime-group-id")))
+   (when (String/IsNullOrWhiteSpace initial-namespace)
+     (throw (ArgumentException. "A namespace name is required." "initial-namespace")))
+   (let [core (find-ns 'clojure.core)
+         read-fn (when core (ns-resolve core 'read))
+         eval-fn (when core (ns-resolve core 'eval))]
+     (when (or (nil? read-fn) (nil? eval-fn)
+               (not (.hasRoot read-fn)) (not (.hasRoot eval-fn))
+               (not (instance? IFn (.getRawRoot read-fn)))
+               (not (instance? IFn (.getRawRoot eval-fn))))
+       (throw (InvalidOperationException. "The owner must initialize Clojure core before loading the adapter.")))
+     (let [[bindings code message] (initial-bindings initial-namespace)]
+       (when code (throw (InvalidOperationException. message)))
+       (let [sessions (embedded-nrepl.session/create-factory bindings)]
+         [(embedded-nrepl.evaluation/create-evaluator runtime-group-id read-fn eval-fn sessions)
+          sessions])))))

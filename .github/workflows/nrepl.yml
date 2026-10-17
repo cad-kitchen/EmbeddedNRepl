@@ -1,0 +1,128 @@
+name: nREPL package checks
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  tests:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        framework: [net472, net8.0, net10.0]
+    env:
+      DOTNET_INSTALL_DIR: ${{ github.workspace }}/artifacts/dependencies/dotnet
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+          dotnet-version: 8.0.420
+      - name: Restore independent solution
+        shell: pwsh
+        run: |
+          . ./build/Use-WorkspaceSdk.ps1
+          & $nreplSdk restore EmbeddedNRepl.sln --configfile build/ci/NuGet.Config --locked-mode
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Test protocol and real ClojureCLR
+        shell: pwsh
+        env:
+          TEST_FRAMEWORK: ${{ matrix.framework }}
+        run: |
+          ./build/Run-Tests.ps1 -Layer Independent -Framework $env:TEST_FRAMEWORK -RunName ci-protocol
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./build/Run-Tests.ps1 -Layer ClojureClr -Framework $env:TEST_FRAMEWORK -Filter 'FullyQualifiedName!~AcceptanceAvailabilityTests' -RunName ci-language
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./build/Run-Tests.ps1 -Layer Client -Framework $env:TEST_FRAMEWORK -Filter 'FullyQualifiedName~DisposableHostTests' -RunName ci-process
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build the package and test an isolated consumer
+        shell: pwsh
+        env:
+          TEST_FRAMEWORK: ${{ matrix.framework }}
+        run: |
+          ./build/Pack.ps1
+          ./build/Test-Package.ps1 -Framework $env:TEST_FRAMEWORK
+      - name: Check runner contracts and formatting
+        if: matrix.framework == 'net10.0'
+        shell: pwsh
+        run: |
+          foreach ($case in @('Target', 'BuildFailure', 'Coverage', 'CoverageMissing', 'CoverageEmpty', 'PublishFailure')) {
+            ./tests/Build/RunTests.Tests.ps1 -Case $case
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          ./tests/Build/CoverageSummary.Tests.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          . ./build/Use-WorkspaceSdk.ps1
+          & $nreplSdk format whitespace EmbeddedNRepl.sln --no-restore --verify-no-changes
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: nrepl-tests-${{ matrix.framework }}
+          path: |
+            artifacts/tests/
+            artifacts/runner-contracts/
+          retention-days: 30
+  coverage:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    strategy:
+      matrix:
+        framework: [net8.0, net10.0]
+    env:
+      DOTNET_INSTALL_DIR: ${{ github.workspace }}/artifacts/dependencies/dotnet
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+          dotnet-version: 8.0.420
+      - name: Restore and measure nREPL C# coverage
+        shell: pwsh
+        env:
+          TEST_FRAMEWORK: ${{ matrix.framework }}
+        run: |
+          . ./build/Use-WorkspaceSdk.ps1
+          & $nreplSdk restore EmbeddedNRepl.sln --configfile build/ci/NuGet.Config --locked-mode
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./build/Run-Coverage.ps1 -Framework $env:TEST_FRAMEWORK -RunName ci
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: nrepl-coverage-${{ matrix.framework }}
+          path: |
+            artifacts/coverage/
+            artifacts/tests/
+            !artifacts/tests/**/published/**
+          retention-days: 30
+  package:
+    needs: [tests, coverage]
+    runs-on: windows-latest
+    env:
+      DOTNET_INSTALL_DIR: ${{ github.workspace }}/artifacts/dependencies/dotnet
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+      - name: Build the single release package
+        shell: pwsh
+        run: |
+          . ./build/Use-WorkspaceSdk.ps1
+          & $nreplSdk restore src/EmbeddedNRepl/EmbeddedNRepl.csproj --configfile build/ci/NuGet.Config --locked-mode
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./build/Pack.ps1
+      - uses: actions/upload-artifact@v7
+        with:
+          name: EmbeddedNRepl-package
+          path: artifacts/nuget/*.nupkg
+          if-no-files-found: error

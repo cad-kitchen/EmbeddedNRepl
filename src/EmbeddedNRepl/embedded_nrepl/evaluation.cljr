@@ -1,0 +1,168 @@
+(ns embedded-nrepl.evaluation
+  (:import (System ArgumentException ArgumentNullException Exception Int32 InvalidOperationException
+                   Object OperationCanceledException String)
+           (System.IO StringReader)
+           (System.Threading CancellationToken)
+           (System.Threading.Tasks Task)
+           (EmbeddedNRepl.Hosting IReplEvaluationOutput IReplEvaluator ReplEvaluation
+                                 ReplEvaluationOutcome ReplExecutionContext ReplOutputKind
+                                 ReplOutputTextWriter)
+           (clojure.lang IObj LineNumberingTextReader Var)))
+
+(def ^:dynamic *cancellation-token* CancellationToken/None)
+
+(defn check-cancelled! []
+  (.ThrowIfCancellationRequested ^CancellationToken *cancellation-token*))
+
+(defn- position [relative start]
+  (int (min Int32/MaxValue (max 1 (+ (long relative) (long start) -1)))))
+
+(defn- relocate-form [form line column]
+  (let [original-meta (meta form)
+        rebuilt (cond
+                  (map? form)
+                  (into (empty form)
+                        (map (fn [[k v]] [(relocate-form k line column)
+                                          (relocate-form v line column)]) form))
+                  (vector? form) (mapv #(relocate-form % line column) form)
+                  (set? form) (into (empty form) (map #(relocate-form % line column) form))
+                  (list? form) (apply list (map #(relocate-form % line column) form))
+                  :else form)]
+    (if (and original-meta (instance? IObj rebuilt) (:line original-meta))
+      (let [relative-line (long (:line original-meta))
+            relocated (assoc original-meta :line (position relative-line line))
+            relocated (if (:column relocated)
+                        (assoc relocated :column
+                               (position (dec (long (:column relocated)))
+                                         (if (= relative-line 1) column 1)))
+                        relocated)]
+        (with-meta rebuilt (dissoc relocated :source-span)))
+      rebuilt)))
+
+(defn- run-evaluation [read-fn eval-fn source start-line start-column quota printing output]
+  (let [reader (LineNumberingTextReader. (StringReader. source))
+        eof (Object.)
+        phase (atom "read")]
+    (try
+      (check-cancelled!)
+      (loop []
+        (reset! phase "read")
+        (let [form (.invoke read-fn reader false eof)]
+          (if (identical? form eof)
+            [:succeeded nil nil 1 1]
+            (do
+              (check-cancelled!)
+              (reset! phase "eval")
+              (let [value (.invoke eval-fn (relocate-form form start-line start-column))]
+                (reset! phase "print")
+                (let [[text truncated] (embedded-nrepl.printing/bounded-print value quota printing)]
+                  (set! *3 *2)
+                  (set! *2 *1)
+                  (set! *1 value)
+                  (embedded-nrepl.printing/write-value! output text (str (ns-name *ns*)) truncated))
+                (recur))))))
+      (catch OperationCanceledException error
+        (if (and (.IsCancellationRequested ^CancellationToken *cancellation-token*)
+                 (= (.CancellationToken error) *cancellation-token*))
+          [:interrupted nil nil 1 1]
+          (do
+            (set! *e error)
+            [:failed error @phase
+             (position (.LineNumber reader) start-line)
+             (position (.ColumnNumber reader)
+                       (if (= (.LineNumber reader) 1) start-column 1))])))
+      (catch Exception error
+        (set! *e error)
+        [:failed error @phase
+         (position (.LineNumber reader) start-line)
+         (position (.ColumnNumber reader)
+                   (if (= (.LineNumber reader) 1) start-column 1))]))))
+
+(defn- capture-bindings [active saved explicit-namespace?]
+  (let [captured (reduce (fn [result [variable _]]
+                           (assoc result variable (.deref variable)))
+                         {} active)]
+    (if explicit-namespace?
+      (assoc captured #'*ns* (get saved #'*ns*))
+      captured)))
+
+(defn- completed-task [outcome]
+  (Task/FromResult (type-args ReplEvaluationOutcome) outcome))
+
+(defn- evaluate-request
+  [runtime-group-id read-fn eval-fn sessions evaluation state context output cancellation-token]
+  (when (nil? evaluation) (throw (ArgumentNullException. "evaluation")))
+  (when (nil? context) (throw (ArgumentNullException. "context")))
+  (when (nil? output) (throw (ArgumentNullException. "output")))
+  (when (not= runtime-group-id (.RuntimeGroupId ^ReplExecutionContext context))
+    (throw (ArgumentException. "The captured runtime group does not match this evaluator." "context")))
+  (let [source (.Source ^ReplEvaluation evaluation)
+        line (.Line ^ReplEvaluation evaluation)
+        column (.Column ^ReplEvaluation evaluation)
+        quota (.ValueQuotaBytes ^ReplEvaluation evaluation)]
+    (when (or (nil? source) (< line 1) (> line Int32/MaxValue)
+              (< column 1) (> column Int32/MaxValue) (< quota 1))
+      (throw (ArgumentException. "Invalid evaluation source, position or quota." "evaluation")))
+    (let [session (embedded-nrepl.session/acquire! sessions state)]
+      (try
+        (let [source-name (or (.SourceName ^ReplEvaluation evaluation) "<nrepl-eval>")
+              requested-namespace (.Namespace ^ReplEvaluation evaluation)
+              selected-namespace (when requested-namespace (find-ns (symbol requested-namespace)))
+              saved (embedded-nrepl.session/state-bindings session)]
+          (if (and requested-namespace (nil? selected-namespace))
+            (do
+              (embedded-nrepl.printing/report-error!
+                output
+                (InvalidOperationException. "The requested namespace does not exist in the attached runtime.")
+                "namespace-not-found" "namespace" source-name line column)
+              (completed-task ReplEvaluationOutcome/Failed))
+            (let [active (if selected-namespace (assoc saved #'*ns* selected-namespace) saved)
+                  gate (Object.)
+                  stdout (ReplOutputTextWriter. output ReplOutputKind/Out gate)
+                  stderr (ReplOutputTextWriter. output ReplOutputKind/Error gate)
+                  input (StringReader. "")
+                  frame (Var/getThreadBindingFrame)
+                  pushed (atom false)
+                  result (atom [:failed
+                                (InvalidOperationException. "ClojureCLR evaluation did not return a result.")
+                                "adapter" line column])]
+              (try
+                (Var/pushThreadBindings
+                  (merge active
+                         {#'*file* source-name
+                          #'*source-path* source-name
+                          clojure.lang.Compiler/LineVar (int line)
+                          clojure.lang.Compiler/ColumnVar (int column)
+                          #'*out* stdout
+                          #'*err* stderr
+                          #'*in* input
+                          #'*cancellation-token* cancellation-token}))
+                (reset! pushed true)
+                (reset! result (run-evaluation read-fn eval-fn source line column quota (.Printing ^ReplEvaluation evaluation) output))
+                (finally
+                  (when @pushed
+                    (embedded-nrepl.session/publish!
+                      session (capture-bindings active saved (boolean requested-namespace))))
+                  (Var/resetThreadBindingFrame frame)
+                  (.Dispose stdout)
+                  (.Dispose stderr)
+                  (.Dispose input)))
+              (let [[status error phase error-line error-column] @result]
+                (case status
+                  :succeeded (completed-task ReplEvaluationOutcome/Succeeded)
+                  :interrupted (completed-task ReplEvaluationOutcome/Interrupted)
+                  (do
+                    (embedded-nrepl.printing/report-error!
+                      output error "eval-error" phase source-name error-line error-column)
+                    (completed-task ReplEvaluationOutcome/Failed)))))))
+        (finally
+          (embedded-nrepl.session/complete! session))))))
+
+(deftype Evaluator [runtime-group-id read-fn eval-fn sessions]
+  IReplEvaluator
+  (EvaluateAsync [this evaluation state context output cancellation-token]
+    (evaluate-request runtime-group-id read-fn eval-fn sessions
+                      evaluation state context output cancellation-token)))
+
+(defn create-evaluator [runtime-group-id read-fn eval-fn sessions]
+  (Evaluator. runtime-group-id read-fn eval-fn sessions))

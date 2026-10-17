@@ -1,0 +1,12 @@
+$ErrorActionPreference = 'Stop'
+$nreplRoot = Split-Path -Parent $PSScriptRoot
+$executable = if ($IsWindows) { 'dotnet.exe' } else { 'dotnet' }
+$nreplSdk = Join-Path $nreplRoot "artifacts/dependencies/dotnet/$executable"
+if ($env:EMBEDDED_NREPL_DOTNET) { $nreplSdk = $env:EMBEDDED_NREPL_DOTNET }
+elseif (-not (Test-Path -LiteralPath $nreplSdk)) { $nreplSdk = (Get-Command dotnet -ErrorAction Stop).Source }
+$env:DOTNET_CLI_HOME = Join-Path $nreplRoot 'artifacts/dotnet-home'
+$env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'
+$env:DOTNET_NOLOGO = '1'
+$env:DOTNET_SKIP_FIRST_TIME_EXPERIENCE = '1'
+$env:DOTNET_ADD_GLOBAL_TOOLS_TO_PATH = '0'
+$env:DOTNET_CLI_WORKLOAD_UPDATE_NOTIFY_DISABLE = 'true'

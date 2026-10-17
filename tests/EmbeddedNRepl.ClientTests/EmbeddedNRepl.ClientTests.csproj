@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFrameworks>net472;net8.0;net10.0</TargetFrameworks>
+    <IsTestProject>true</IsTestProject>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="NUnit" />
+    <PackageReference Include="NUnit3TestAdapter" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" PrivateAssets="all" Condition="'$(TargetFramework)' == 'net472'" />
+    <Compile Include="../Support/RuntimeReport.cs" Link="RuntimeReport.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/EmbeddedNRepl/EmbeddedNRepl.csproj" />
+    <ProjectReference Include="../EmbeddedNRepl.TestSupport/EmbeddedNRepl.TestSupport.csproj" />
+    <ProjectReference Include="../../samples/EmbeddedNRepl.ConsoleHost/EmbeddedNRepl.ConsoleHost.csproj" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+  <ItemGroup><Compile Include="../Support/ConsoleProcess.cs" Link="ConsoleProcess.cs" /></ItemGroup>
+  <Target Name="CopyConsoleHost" AfterTargets="Build" Condition="'$(TargetFramework)' != ''">
+    <ItemGroup><ConsoleHostFiles Include="../../samples/EmbeddedNRepl.ConsoleHost/bin/$(Configuration)/$(TargetFramework)/**/*" /></ItemGroup>
+    <Copy SourceFiles="@(ConsoleHostFiles)" DestinationFiles="@(ConsoleHostFiles->'$(TargetDir)console-host/%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+  </Target>
+</Project>

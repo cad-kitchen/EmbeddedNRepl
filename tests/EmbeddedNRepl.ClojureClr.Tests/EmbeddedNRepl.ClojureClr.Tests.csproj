@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFrameworks>net472;net8.0;net10.0</TargetFrameworks>
+    <IsTestProject>true</IsTestProject>
+    <IsPackable>false</IsPackable>
+    <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
+    <GenerateBindingRedirectsOutputType>true</GenerateBindingRedirectsOutputType>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="NUnit" />
+    <PackageReference Include="NUnit3TestAdapter" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" PrivateAssets="all" />
+    <PackageReference Include="Clojure" />
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" PrivateAssets="all" Condition="'$(TargetFramework)' == 'net472'" />
+    <Compile Include="../Support/RuntimeReport.cs" Link="RuntimeReport.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/EmbeddedNRepl/EmbeddedNRepl.csproj" />
+    <ProjectReference Include="../../samples/EmbeddedNRepl.ConsoleHost/EmbeddedNRepl.ConsoleHost.csproj" />
+    <ProjectReference Include="../EmbeddedNRepl.TestSupport/EmbeddedNRepl.TestSupport.csproj" />
+  </ItemGroup>
+</Project>

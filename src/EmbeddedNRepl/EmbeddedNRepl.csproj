@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <Description>Embeddable ClojureCLR nREPL transport, sessions, and host-owned execution.</Description>
+    <PackageId>EmbeddedNRepl</PackageId>
+    <Authors>EmbeddedNRepl contributors</Authors>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageTags>nrepl;clojure;clojureclr;repl;embedded;dotnet</PackageTags>
+    <IsPackable>true</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <None Include="../../README.md" Pack="true" PackagePath="/" />
+    <None Include="../../LICENSE" Pack="true" PackagePath="/" />
+    <EmbeddedResource Include="embedded_nrepl/session.cljr" LogicalName="embedded-nrepl.session.cljr" />
+    <EmbeddedResource Include="embedded_nrepl/printing.cljr" LogicalName="embedded-nrepl.printing.cljr" />
+    <EmbeddedResource Include="embedded_nrepl/evaluation.cljr" LogicalName="embedded-nrepl.evaluation.cljr" />
+    <EmbeddedResource Include="embedded_nrepl/runtime.cljr" LogicalName="embedded-nrepl.runtime.cljr" />
+  </ItemGroup>
+</Project>
